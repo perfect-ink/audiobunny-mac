@@ -54,6 +54,7 @@ final class PluginBundleWindowController: NSObject, NSWindowDelegate {
 
     nonisolated func windowWillClose(_ notification: Notification) {
         Task { @MainActor in
+            self.preview.playback?.shutdown()
             Self.open.removeAll { $0 === self }
         }
     }
@@ -85,6 +86,8 @@ final class PluginBundlePreview: ObservableObject {
     let version: String?
     @Published var phase: Phase = .loading
     @Published var installState: InstallState
+    /// Playback controls, once the Audio Unit has loaded.
+    @Published private(set) var playback: AudioUnitPlayback?
     private weak var manager: PluginManager?
     private var audioUnit: AVAudioUnit?
 
@@ -137,12 +140,13 @@ final class PluginBundlePreview: ObservableObject {
                     self.phase = .unavailable("Couldn't load \(self.name): \(error?.localizedDescription ?? "the plugin didn't start").")
                     return
                 }
-                // As in AudioUnitPreviewWindowController: no engine, no busses,
-                // nothing rendering — just the plugin and its view.
+                // As in AudioUnitPreviewWindowController: nothing renders
+                // until Play or a note starts it.
                 self.audioUnit = avAudioUnit
+                self.playback = AudioUnitPlayback(audioUnit: avAudioUnit)
                 avAudioUnit.auAudioUnit.requestViewController { viewController in
                     DispatchQueue.main.async {
-                        self.phase = .loaded(viewController)
+                        self.phase = .loaded(audioUnitViewController(viewController, for: avAudioUnit))
                     }
                 }
             }
@@ -252,7 +256,11 @@ struct PluginBundleView: View {
             ProgressView("Loading \(preview.name)…")
                 .frame(width: 520, height: 260)
         case .loaded(let viewController?):
-            AudioUnitViewHost(viewController: viewController)
+            if let playback = preview.playback {
+                AudioUnitWindowContent(viewController: viewController, playback: playback)
+            } else {
+                AudioUnitViewHost(viewController: viewController)
+            }
         case .loaded(nil):
             placeholder("\(preview.name) doesn't provide a custom view.")
         case .unavailable(let message):
@@ -270,22 +278,6 @@ struct PluginBundleView: View {
 
     private func abbreviated(_ url: URL) -> String {
         (url.path as NSString).abbreviatingWithTildeInPath
-    }
-}
-
-/// An Audio Unit's own view controller, at the size the plugin asks for.
-private struct AudioUnitViewHost: NSViewControllerRepresentable {
-    let viewController: NSViewController
-
-    func makeNSViewController(context: Context) -> NSViewController { viewController }
-    func updateNSViewController(_ nsViewController: NSViewController, context: Context) {}
-
-    func sizeThatFits(_ proposal: ProposedViewSize, nsViewController: NSViewController, context: Context) -> CGSize? {
-        let preferred = nsViewController.preferredContentSize
-        if preferred.width > 0, preferred.height > 0 { return preferred }
-        let frame = nsViewController.view.frame.size
-        if frame.width > 0, frame.height > 0 { return frame }
-        return CGSize(width: 600, height: 400)
     }
 }
 

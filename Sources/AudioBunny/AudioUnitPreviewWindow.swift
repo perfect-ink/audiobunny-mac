@@ -1,12 +1,12 @@
 import AppKit
 import AVFoundation
 import CoreAudioKit  // AUAudioUnit.requestViewController(completionHandler:)
+import SwiftUI
 
-/// Shows an Audio Unit's own UI in a plain window — no `AVAudioEngine`, no
-/// input/output busses connected, nothing rendering. Just instantiate the unit
-/// and ask it for its view controller, so you can look at (and click around) a
-/// plugin `auval` refuses to clear or times out on, without trusting the
-/// automated verdict alone.
+/// Shows an Audio Unit's own UI in a window, with playback controls under it
+/// (see AudioUnitPlaybackPanel). Nothing renders until the user presses Play
+/// or a note, so opening a plugin `auval` refuses to clear or times out on is
+/// still just a look at it, without trusting the automated verdict alone.
 ///
 /// Kept alive via `open`, since neither the window nor the `AVAudioUnit` is
 /// retained by anything else — closing the window releases both.
@@ -15,10 +15,12 @@ final class AudioUnitPreviewWindowController: NSObject, NSWindowDelegate {
     private static var open: [AudioUnitPreviewWindowController] = []
 
     private let audioUnit: AVAudioUnit
+    private let playback: AudioUnitPlayback
     private var window: NSWindow?
 
     private init(audioUnit: AVAudioUnit) {
         self.audioUnit = audioUnit
+        playback = AudioUnitPlayback(audioUnit: audioUnit)
     }
 
     /// Instantiates `desc` and opens its view. Reports a failure via
@@ -27,7 +29,7 @@ final class AudioUnitPreviewWindowController: NSObject, NSWindowDelegate {
     static func present(_ desc: AudioComponentDescription, pluginName: String, onError: @escaping (String) -> Void) {
         // Ask the system to host it in a separate process when the plugin
         // supports that — the same isolation "Test All" uses, so a plugin
-        // that's merely ugly to look at can't take AudioBunny down with it.
+        // that crashes can't take AudioBunny down with it.
         AVAudioUnit.instantiate(with: desc, options: [.loadOutOfProcess]) { avAudioUnit, error in
             Task { @MainActor in
                 guard let avAudioUnit, error == nil else {
@@ -42,15 +44,18 @@ final class AudioUnitPreviewWindowController: NSObject, NSWindowDelegate {
     }
 
     private func show(pluginName: String) {
-        // Deliberately not calling allocateRenderResources() or connecting any
-        // bus — this is a look-at-it preview, not a functioning audio path.
         audioUnit.auAudioUnit.requestViewController { [weak self] viewController in
             DispatchQueue.main.async {
                 guard let self else { return }
-                let content = viewController ?? Self.noViewFallback(for: pluginName)
-                let window = NSWindow(contentViewController: content)
+                let content = AudioUnitWindowContent(
+                    viewController: audioUnitViewController(viewController, for: self.audioUnit),
+                    playback: self.playback)
+                let hosting = NSHostingController(rootView: content)
+                // Follow the content, so hiding the plugin's UI shrinks the window.
+                hosting.sizingOptions = [.preferredContentSize]
+                let window = NSWindow(contentViewController: hosting)
                 window.title = pluginName
-                window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+                window.styleMask = [.titled, .closable, .miniaturizable]
                 window.isReleasedWhenClosed = false
                 window.delegate = self
                 window.center()
@@ -61,18 +66,9 @@ final class AudioUnitPreviewWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    private static func noViewFallback(for pluginName: String) -> NSViewController {
-        let label = NSTextField(wrappingLabelWithString: "\(pluginName) doesn't provide a custom view.")
-        label.alignment = .center
-        label.frame = NSRect(x: 20, y: 20, width: 320, height: 60)
-        let vc = NSViewController()
-        vc.view = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 100))
-        vc.view.addSubview(label)
-        return vc
-    }
-
     nonisolated func windowWillClose(_ notification: Notification) {
         Task { @MainActor in
+            self.playback.shutdown()
             Self.open.removeAll { $0 === self }
         }
     }
