@@ -708,9 +708,9 @@ struct PluginDetailView: View {
     // the same instrument) so we can list every install location, not just the
     // one that happened to be selected.
     private var groupVariants: [AudioPlugin] {
-        manager.plugins
+        uniqueInstallLocations(manager.plugins
             .filter { $0.name.caseInsensitiveCompare(plugin.name) == .orderedSame }
-            .sorted { $0.type.rawValue < $1.type.rawValue }
+            .sorted { $0.type.rawValue < $1.type.rawValue })
     }
 
     var body: some View {

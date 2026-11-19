@@ -973,6 +973,18 @@ func preferredCategory(for group: [AudioPlugin]) -> PluginCategory? {
     return group.compactMap(\.category).first
 }
 
+/// One entry per format and bundle on disk. A single `.component` can register
+/// several Audio Units under one name (Reason Rack Plugin's instrument and MIDI
+/// effect; Apple's AUTimePitch as both `aufc` and `auol`), and listing each of
+/// them showed the same path twice. Disabling moves the whole bundle anyway, so
+/// one location row per bundle is the honest view.
+func uniqueInstallLocations(_ variants: [AudioPlugin]) -> [AudioPlugin] {
+    var seen = Set<String>()
+    return variants.filter {
+        seen.insert("\($0.type.rawValue)|\($0.fileURL.standardizedFileURL.path)").inserted
+    }
+}
+
 // MARK: - Process Helper
 
 /// Runs a process and returns its captured stdout, or nil if it couldn't be launched.
